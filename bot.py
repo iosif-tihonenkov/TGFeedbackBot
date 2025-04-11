@@ -3,6 +3,7 @@ from config import BOT_TOKEN
 from handlers.user import start_user
 from handlers.admin import start_admin
 
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
