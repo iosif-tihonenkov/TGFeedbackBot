@@ -1,30 +1,78 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+import logging
+from telegram import Update, Message
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
+from config import BOT_TOKEN, ADMIN_CHAT_ID
 
-#Здесь задается токен бота
-TOKEN = "7770486473:123"
+# Настройка логгирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-#Тут у нас работает команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Привет! Я бот. Как дела?' + update.message.text)  #объект update содержит всю информацию о входящем сообщении.
-    #В данном случае мы видим следующее: await (не закрывать функцию, пока не выполнится участок кода) update(см.коомент выше).message(объект сообщения).reply_text("Привет! Я бот. Как дела") - ну тут понятно - вернуть текст в скобках
+# Словарь для хранения соответствий: {id сообщения в админ-чате: (id пользователя, id оригинального сообщения)}
+message_store = {}
 
-#Здесь работает возврат сообщений
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(update.message.text)
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка сообщений от пользователей и пересылка админам"""
+    user = update.message.from_user
+    forwarded_msg = await update.message.forward(ADMIN_CHAT_ID)
+    
+    # Сохраняем связь между пересланным сообщением и пользователем
+    message_store[forwarded_msg.message_id] = (
+        update.message.chat_id,
+        update.message.message_id
+    )
+    
+    await update.message.reply_text("Ваше сообщение отправлено администраторам. Ожидайте ответа!")
 
+async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка команды /reply админа для ответа пользователю"""
+    if update.message.chat.id != ADMIN_CHAT_ID:
+        return
+    
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Ответьте командой /reply на пересланное сообщение пользователя")
+        return
+    
+    replied_msg_id = update.message.reply_to_message.message_id
+    
+    if replied_msg_id not in message_store:
+        await update.message.reply_text("Не удалось найти исходное сообщение пользователя")
+        return
+    
+    user_chat_id, original_msg_id = message_store[replied_msg_id]
+    admin_reply = update.message.text.replace('/reply', '').strip()
+    
+    if not admin_reply:
+        await update.message.reply_text("Добавьте текст ответа после /reply")
+        return
+    
+    try:
+        await context.bot.send_message(
+            chat_id=user_chat_id,
+            text=f"Ответ администратора:\n{admin_reply}",
+            reply_to_message_id=original_msg_id
+        )
+        await update.message.reply_text("Ответ отправлен пользователю")
+    except Exception as e:
+        logging.error(f"Ошибка при отправке: {e}")
+        await update.message.reply_text("Не удалось отправить ответ")
 
-#Основной пул работы
 def main():
-    # Создаем Application
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).build()
     
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start)) #Тут у нас обработчик команды /start. Как вводить команду - указано в кавычках. 
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo)) #А этот обработчик на команду echo
+    # Обработчики
+    application.add_handler(CommandHandler("reply", reply_to_user))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message))
     
-    # Запускаем бота
+    # Запуск бота
     application.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
